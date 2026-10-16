@@ -1,17 +1,20 @@
 $ErrorActionPreference = 'Stop'
 
-$path = 'koharu/crates/koharu-renderer/src/text_renderer.rs'
-$s = Get-Content -Raw -LiteralPath $path
-$s = $s -replace "`r`n", "`n"
+function Normalize-Lf([string]$text) {
+    return $text -replace "`r`n", "`n"
+}
 
-$old1 = @'
+$path = 'koharu/crates/koharu-renderer/src/text_renderer.rs'
+$s = Normalize-Lf (Get-Content -Raw -LiteralPath $path)
+
+$old1 = Normalize-Lf @'
         let bounds = if is_bubble_text {
             inset(frame, descriptor.text_inset)
         } else {
             frame
         };
 '@
-$new1 = @'
+$new1 = Normalize-Lf @'
         let text_inset = if is_bubble_text {
             adaptive_text_inset(frame, descriptor.text_inset)
         } else {
@@ -36,7 +39,7 @@ $new1 = @'
 if (-not $s.Contains($old1)) { throw 'Could not find bounds patch target' }
 $s = $s.Replace($old1, $new1)
 
-$old2 = @'
+$old2 = Normalize-Lf @'
             let [top, _, _, left] = descriptor.text_inset;
             let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
             layout = layout.with_comic_balloon(
@@ -46,7 +49,7 @@ $old2 = @'
                 descriptor.text_inset.into_iter().fold(0.0, f32::max),
             );
 '@
-$new2 = @'
+$new2 = Normalize-Lf @'
             let [top, _, _, left] = text_inset;
             let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
             layout = layout.with_comic_balloon(
@@ -60,7 +63,7 @@ if (-not $s.Contains($old2)) { throw 'Could not find contour patch target' }
 $s = $s.Replace($old2, $new2)
 
 $marker = 'fn inset(rect: LayoutBox, [top, right, bottom, left]: [f32; 4]) -> LayoutBox {'
-$helper = @'
+$helper = Normalize-Lf @'
 fn adaptive_text_inset(rect: LayoutBox, inset: [f32; 4]) -> [f32; 4] {
     let [mut top, mut right, mut bottom, mut left] =
         inset.map(|value| if value.is_finite() { value.max(0.0) } else { 0.0 });
