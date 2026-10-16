@@ -67,10 +67,34 @@ jobs:
         working-directory: koharu
         run: bun run build
 
+      - name: Package complete Windows app
+        shell: pwsh
+        run: |
+          $release = Join-Path (Get-Location) 'koharu/target/release'
+          $portable = Join-Path (Get-Location) 'dist/koharu-0.83.4-fixed-windows'
+          foreach ($required in @('koharu.exe', 'libcef.dll', 'icudtl.dat', 'resources.pak', 'locales')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $release $required))) {
+              throw "Missing runtime file: $required"
+            }
+          }
+          New-Item -ItemType Directory -Path $portable -Force | Out-Null
+          Get-ChildItem -LiteralPath $release -File |
+            Where-Object { $_.Extension -in @('.exe', '.dll', '.pak', '.dat', '.bin', '.json') } |
+            Copy-Item -Destination $portable
+          Copy-Item -LiteralPath (Join-Path $release 'locales') -Destination $portable -Recurse
+          Copy-Item -LiteralPath 'koharu/LICENSE-MIT', 'koharu/LICENSE-APACHE' -Destination $portable
+          Get-ChildItem -LiteralPath $portable -File -Recurse | Sort-Object FullName |
+            ForEach-Object {
+              (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' +
+                [IO.Path]::GetRelativePath($portable, $_.FullName).Replace('\', '/')
+            } |
+            Set-Content -LiteralPath (Join-Path $portable 'SHA256SUMS.txt') -Encoding utf8
+
       - name: Upload fixed Windows build
         uses: actions/upload-artifact@v4
         with:
           name: koharu-0.83.4-fixed-windows
-          path: koharu/target/release/koharu*
+          path: dist/koharu-0.83.4-fixed-windows/
           if-no-files-found: error
           retention-days: 30
+
