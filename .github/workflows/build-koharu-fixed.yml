@@ -1,0 +1,145 @@
+name: Build fixed Koharu 0.83.4
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout helper repo
+        uses: actions/checkout@v4
+
+      - name: Clone Koharu 0.83.4
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch 0.83.4 https://github.com/koharu-rs/koharu.git koharu
+
+      - name: Patch text inset bug
+        shell: pwsh
+        run: |
+          $path = "koharu/crates/koharu-renderer/src/text_renderer.rs"
+          $s = Get-Content -Raw -LiteralPath $path
+          $s = $s -replace "`r`n", "`n"
+
+          $old1 = @'
+        let bounds = if is_bubble_text {
+            inset(frame, descriptor.text_inset)
+        } else {
+            frame
+        };
+'@
+          $new1 = @'
+        let text_inset = if is_bubble_text {
+            adaptive_text_inset(frame, descriptor.text_inset)
+        } else {
+            descriptor.text_inset
+        };
+        if text_inset != descriptor.text_inset {
+            tracing::warn!(
+                entity = %descriptor.entity,
+                width = descriptor.width,
+                height = descriptor.height,
+                original = ?descriptor.text_inset,
+                adjusted = ?text_inset,
+                "clamped oversized text inset"
+            );
+        }
+        let bounds = if is_bubble_text {
+            inset(frame, text_inset)
+        } else {
+            frame
+        };
+'@
+          if (-not $s.Contains($old1)) { throw "Could not find bounds patch target" }
+          $s = $s.Replace($old1, $new1)
+
+          $old2 = @'
+            let [top, _, _, left] = descriptor.text_inset;
+            let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
+            layout = layout.with_comic_balloon(
+                bounds.width,
+                bounds.height,
+                contour,
+                descriptor.text_inset.into_iter().fold(0.0, f32::max),
+            );
+'@
+          $new2 = @'
+            let [top, _, _, left] = text_inset;
+            let contour = contour.iter().map(|&(x, y)| (x - left, y - top)).collect();
+            layout = layout.with_comic_balloon(
+                bounds.width,
+                bounds.height,
+                contour,
+                text_inset.into_iter().fold(0.0, f32::max),
+            );
+'@
+          if (-not $s.Contains($old2)) { throw "Could not find contour patch target" }
+          $s = $s.Replace($old2, $new2)
+
+          $marker = 'fn inset(rect: LayoutBox, [top, right, bottom, left]: [f32; 4]) -> LayoutBox {'
+          $helper = @'
+fn adaptive_text_inset(rect: LayoutBox, inset: [f32; 4]) -> [f32; 4] {
+    let [mut top, mut right, mut bottom, mut left] =
+        inset.map(|value| if value.is_finite() { value.max(0.0) } else { 0.0 });
+
+    clamp_inset_axis(&mut left, &mut right, rect.width);
+    clamp_inset_axis(&mut top, &mut bottom, rect.height);
+
+    [top, right, bottom, left]
+}
+
+fn clamp_inset_axis(first: &mut f32, second: &mut f32, extent: f32) {
+    if !extent.is_finite() || extent <= 0.0 {
+        *first = 0.0;
+        *second = 0.0;
+        return;
+    }
+
+    let total = *first + *second;
+    let maximum_total = extent * 0.5;
+    if total > maximum_total && total > 0.0 {
+        let scale = maximum_total / total;
+        *first *= scale;
+        *second *= scale;
+    }
+}
+
+'@
+          if (-not $s.Contains($marker)) { throw "Could not find inset helper insertion point" }
+          $s = $s.Replace($marker, $helper + $marker)
+
+          [System.IO.File]::WriteAllText($path, $s, [System.Text.UTF8Encoding]::new($false))
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: koharu -> target
+          shared-key: koharu-fixed-windows
+
+      - name: Install dependencies
+        working-directory: koharu
+        run: bun install
+
+      - name: Run renderer tests
+        working-directory: koharu
+        run: cargo test -p koharu-renderer --lib
+
+      - name: Build Koharu
+        working-directory: koharu
+        run: bun run build
+
+      - name: Upload fixed Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: koharu-0.83.4-fixed-windows
+          path: koharu/target/release/koharu*
+          retention-days: 7
