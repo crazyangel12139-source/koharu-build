@@ -26,6 +26,23 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Install official Tauri CLI
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'cargo-tauri.zip'
+          $extract = Join-Path $env:RUNNER_TEMP 'cargo-tauri'
+          Invoke-WebRequest -Uri 'https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v3.0.0-alpha.1/cargo-tauri-x86_64-pc-windows-msvc.zip' -OutFile $archive
+          $expected = 'f077669e4460c7c8e69b03d75a0531d55a787cab853b1c584d6835fb8b51fdc5'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Official Tauri CLI checksum mismatch'
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $extract
+          $executables = @(Get-ChildItem -LiteralPath $extract -Filter cargo-tauri.exe -File -Recurse)
+          if ($executables.Count -ne 1) { throw 'Expected exactly one cargo-tauri.exe' }
+          Copy-Item -LiteralPath $executables[0].FullName -Destination (Join-Path $env:USERPROFILE '.cargo\bin\cargo-tauri.exe')
+          cargo tauri --version
+          if ($LASTEXITCODE -ne 0) { throw 'Tauri CLI verification failed' }
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
         with:
@@ -34,11 +51,17 @@ jobs:
 
       - name: Install dependencies
         working-directory: koharu
-        run: bun install
+        shell: pwsh
+        run: |
+          $manifestPath = Join-Path (Get-Location) 'package.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+          $manifest.scripts.postinstall = 'cargo tauri --version'
+          [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 100), [Text.UTF8Encoding]::new($false))
+          bun install --frozen-lockfile
 
       - name: Run renderer tests
         working-directory: koharu
-        run: cargo test -p koharu-renderer --lib
+        run: cargo test -p koharu-renderer --lib adaptive_text_inset_
 
       - name: Build Koharu
         working-directory: koharu
@@ -49,4 +72,5 @@ jobs:
         with:
           name: koharu-0.83.4-fixed-windows
           path: koharu/target/release/koharu*
-          retention-days: 7
+          if-no-files-found: error
+          retention-days: 30

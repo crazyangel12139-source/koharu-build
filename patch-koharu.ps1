@@ -65,8 +65,13 @@ $s = $s.Replace($old2, $new2)
 $marker = 'fn inset(rect: LayoutBox, [top, right, bottom, left]: [f32; 4]) -> LayoutBox {'
 $helper = Normalize-Lf @'
 fn adaptive_text_inset(rect: LayoutBox, inset: [f32; 4]) -> [f32; 4] {
-    let [mut top, mut right, mut bottom, mut left] =
-        inset.map(|value| if value.is_finite() { value.max(0.0) } else { 0.0 });
+    let [mut top, mut right, mut bottom, mut left] = inset.map(|value| {
+        if value.is_finite() {
+            value.max(0.0)
+        } else {
+            0.0
+        }
+    });
 
     clamp_inset_axis(&mut left, &mut right, rect.width);
     clamp_inset_axis(&mut top, &mut bottom, rect.height);
@@ -93,6 +98,45 @@ fn clamp_inset_axis(first: &mut f32, second: &mut f32, extent: f32) {
 '@
 if (-not $s.Contains($marker)) { throw 'Could not find inset helper insertion point' }
 $s = $s.Replace($marker, $helper + $marker)
+
+
+$testMarker = '    use crate::fonts::FontSystem;'
+$tests = @'
+    #[test]
+    fn adaptive_text_inset_preserves_narrow_balloon_area() {
+        let frame = LayoutBox { x: 0.0, y: 0.0, width: 7.0, height: 43.0 };
+        let adjusted = adaptive_text_inset(frame, [4.0; 4]);
+        assert_eq!(adjusted, [4.0, 1.75, 4.0, 1.75]);
+        let bounds = inset(frame, adjusted);
+        assert_eq!(bounds.width, 3.5);
+        assert_eq!(bounds.height, 35.0);
+    }
+
+    #[test]
+    fn adaptive_text_inset_preserves_short_balloon_area() {
+        let frame = LayoutBox { x: 0.0, y: 0.0, width: 43.0, height: 7.0 };
+        let adjusted = adaptive_text_inset(frame, [4.0; 4]);
+        assert_eq!(adjusted, [1.75, 4.0, 1.75, 4.0]);
+        let bounds = inset(frame, adjusted);
+        assert_eq!(bounds.width, 35.0);
+        assert_eq!(bounds.height, 3.5);
+    }
+
+    #[test]
+    fn adaptive_text_inset_preserves_normal_balloon() {
+        let frame = LayoutBox { x: 0.0, y: 0.0, width: 100.0, height: 60.0 };
+        assert_eq!(adaptive_text_inset(frame, [4.0; 4]), [4.0; 4]);
+    }
+
+    #[test]
+    fn adaptive_text_inset_sanitizes_invalid_padding() {
+        let frame = LayoutBox { x: 0.0, y: 0.0, width: 100.0, height: 60.0 };
+        let adjusted = adaptive_text_inset(frame, [f32::NAN, -4.0, f32::INFINITY, 4.0]);
+        assert_eq!(adjusted, [0.0, 0.0, 0.0, 4.0]);
+    }
+'@
+if (-not $s.Contains($testMarker)) { throw "Could not find renderer test insertion point" }
+$s = $s.Replace($testMarker, $testMarker + "`n`n" + $tests.Replace("`r`n", "`n"))
 
 [System.IO.File]::WriteAllText($path, $s, [System.Text.UTF8Encoding]::new($false))
 Write-Host 'Koharu text inset patch applied.'
